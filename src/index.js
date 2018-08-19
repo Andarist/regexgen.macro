@@ -8,6 +8,75 @@ const flatMap = (iteratee, arr) => [].concat(...arr.map(iteratee))
 
 const strToWords = str => str.trim().split(/\s+/)
 
+const pathToWords = path => {
+  if (path.isStringLiteral()) {
+    return strToWords(path.node.value)
+  }
+
+  if (path.isTemplateLiteral()) {
+    return strToWords(path.node.quasis[0].value.cooked)
+  }
+
+  if (path.isArrayExpression()) {
+    return path.get('elements').map(element => {
+      if (element.isStringLiteral()) {
+        return element.node.value.trim()
+      }
+
+      if (element.isTemplateLiteral()) {
+        return element.node.quasis[0].value.cooked.trim()
+      }
+
+      throw new MacroError(
+        `${pkg.name} can't handle ${element.node.type} as array element.`,
+      )
+    })
+  }
+
+  if (path.isObjectExpression()) {
+    return path.get('properties').map(property => {
+      if (property.node.computed) {
+        throw new MacroError(
+          `${pkg.name} can't handle computed object properties.`,
+        )
+      }
+
+      const key = property.get('key')
+
+      if (key.isStringLiteral()) {
+        return key.node.value.trim()
+      }
+
+      if (key.isIdentifier()) {
+        return key.node.name
+      }
+
+      throw new MacroError(
+        `${pkg.name} can't handle ${key.node.type} as object property.`,
+      )
+    })
+  }
+
+  if (path.isIdentifier()) {
+    const identifierPath = path.scope.getBinding(path.node.name).path
+
+    if (!identifierPath.isVariableDeclarator()) {
+      throw new MacroError(`${pkg.name} can only handle declared variables.`)
+    }
+
+    return getWords([identifierPath.get('init')])
+  }
+
+  throw new MacroError(`${pkg.name} can't handle ${path.node.type}.`)
+}
+
+const getWords = paths => flatMap(pathToWords, paths)
+
+const isRegExpConstructor = path =>
+  path.isNewExpression() && path.get('callee').node.name === 'RegExp'
+const isInRegExpConstructor = path =>
+  isRegExpConstructor(path.find(p => isRegExpConstructor(p) || p.isStatement()))
+
 const regexgenMacro = ({
   references,
   state: {
@@ -29,70 +98,6 @@ const regexgenMacro = ({
     )
   }
 
-  const pathToWords = path => {
-    if (path.isStringLiteral()) {
-      return strToWords(path.node.value)
-    }
-
-    if (path.isTemplateLiteral()) {
-      return strToWords(path.node.quasis[0].value.cooked)
-    }
-
-    if (path.isArrayExpression()) {
-      return path.get('elements').map(element => {
-        if (element.isStringLiteral()) {
-          return element.node.value.trim()
-        }
-
-        if (element.isTemplateLiteral()) {
-          return element.node.quasis[0].value.cooked.trim()
-        }
-
-        throw new MacroError(
-          `${pkg.name} can't handle ${element.node.type} as array element.`,
-        )
-      })
-    }
-
-    if (path.isObjectExpression()) {
-      return path.get('properties').map(property => {
-        if (property.node.computed) {
-          throw new MacroError(
-            `${pkg.name} can't handle computed object properties.`,
-          )
-        }
-
-        const key = property.get('key')
-
-        if (key.isStringLiteral()) {
-          return key.node.value.trim()
-        }
-
-        if (key.isIdentifier()) {
-          return key.node.name
-        }
-
-        throw new MacroError(
-          `${pkg.name} can't handle ${key.node.type} as object property.`,
-        )
-      })
-    }
-
-    if (path.isIdentifier()) {
-      const identifierPath = path.scope.getBinding(path.node.name).path
-
-      if (!identifierPath.isVariableDeclarator()) {
-        throw new MacroError(`${pkg.name} can only handle declared variables.`)
-      }
-
-      return getWords([identifierPath.get('init')])
-    }
-
-    throw new MacroError(`${pkg.name} can't handle ${path.node.type}.`)
-  }
-
-  const getWords = paths => flatMap(pathToWords, paths)
-
   references.default.forEach(({ parentPath: regexgenCall }) => {
     if (!regexgenCall.isCallExpression()) {
       throw new MacroError(
@@ -105,6 +110,12 @@ const regexgenMacro = ({
     }
 
     const words = getWords(regexgenCall.get('arguments'))
+
+    if (isInRegExpConstructor(regexgenCall)) {
+      regexgenCall.replaceWith(t.stringLiteral(regexgen(words).source))
+      return
+    }
+
     regexgenCall.replaceWith(t.regExpLiteral(regexgen(words).source))
   })
 }
