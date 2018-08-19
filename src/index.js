@@ -77,6 +77,49 @@ const isRegExpConstructor = path =>
 const isInRegExpConstructor = path =>
   isRegExpConstructor(path.find(p => isRegExpConstructor(p) || p.isStatement()))
 
+const tryConcatenating = (path, concatenated) => {
+  let { key } = path
+  path = path.parentPath
+
+  do {
+    if (path.isBinaryExpression()) {
+      if (key === 'left') {
+        const right = path.get('right')
+
+        if (!right.isStringLiteral()) {
+          return null
+        }
+
+        concatenated += right.node.value
+      } else {
+        const left = path.get('left')
+
+        if (!left.isStringLiteral()) {
+          return null
+        }
+
+        concatenated = left.node.value + concatenated
+      }
+    } else if (path.isTemplateLiteral()) {
+      if (key !== 0) {
+        return null
+      }
+
+      concatenated =
+        path.get('quasis')[0].node.value.cooked +
+        concatenated +
+        path.get('quasis')[1].node.value.cooked
+    } else {
+      return null
+    }
+
+    ;({ key } = path)
+    path = path.parentPath
+  } while (!isRegExpConstructor(path))
+
+  return concatenated
+}
+
 const regexgenMacro = ({
   references,
   state: {
@@ -110,13 +153,25 @@ const regexgenMacro = ({
     }
 
     const words = getWords(regexgenCall.get('arguments'))
+    const compiledRegExp = regexgen(words).source
 
     if (isInRegExpConstructor(regexgenCall)) {
-      regexgenCall.replaceWith(t.stringLiteral(regexgen(words).source))
+      const concatenated = tryConcatenating(regexgenCall, compiledRegExp)
+
+      if (concatenated) {
+        const regExpConstructor = regexgenCall.find(p => isRegExpConstructor(p))
+        const flags = regExpConstructor.get('arguments.1')
+        regExpConstructor.replaceWith(
+          t.regExpLiteral(concatenated, flags && flags.node.value),
+        )
+        return
+      }
+
+      regexgenCall.replaceWith(t.stringLiteral(compiledRegExp))
       return
     }
 
-    regexgenCall.replaceWith(t.regExpLiteral(regexgen(words).source))
+    regexgenCall.replaceWith(t.regExpLiteral(compiledRegExp))
   })
 }
 
