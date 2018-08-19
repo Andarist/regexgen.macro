@@ -1,6 +1,6 @@
 {
   "name": "regexgen.macro",
-  "version": "0.0.0",
+  "version": "1.0.0",
   "description": "🎣 Convert your set of strings to optimized RegExp at build time.",
   "main": "lib",
   "files": [
